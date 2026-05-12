@@ -13,17 +13,20 @@ Target journals:
   - JAMIA
 
 Usage:
-  python medical_ai_papers.py              # print today's digest
-  python medical_ai_papers.py --hours 48  # search last 48 hours (default)
-  python medical_ai_papers.py --max 7     # max papers to show (default 7)
+  python medical_ai_papers.py                    # print today's digest
+  python medical_ai_papers.py --hours 24         # search last 24 hours
+  python medical_ai_papers.py --max 10           # show up to 10 papers
+  python medical_ai_papers.py --save             # save to digests/YYYY-MM-DD.md
+  python medical_ai_papers.py --save --push      # save and auto-push to GitHub
+  python medical_ai_papers.py --no-summarize     # skip Claude summarization (faster)
 """
 
 import argparse
 import json
+import os
 import subprocess
-import sys
-import textwrap
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from urllib.parse import urlencode
 import urllib.request
 
@@ -69,6 +72,11 @@ PUBMED_ESUMMARY = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
 PUBMED_EFETCH = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
 PUBMED_BASE = "https://pubmed.ncbi.nlm.nih.gov/"
 
+REPO_ROOT = Path(__file__).parent
+DIGESTS_DIR = REPO_ROOT / "digests"
+
+
+# ── PubMed helpers ─────────────────────────────────────────────────────────────
 
 def pubmed_search(query: str, days: int, retmax: int = 50) -> list[str]:
     min_date = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y/%m/%d")
@@ -117,8 +125,9 @@ def fetch_abstract(pmid: str) -> str:
         return ""
 
 
+# ── Ranking ────────────────────────────────────────────────────────────────────
+
 def score_impact(article: dict) -> float:
-    """Heuristic score: prefer high-IF journals and recent dates."""
     journal_scores = {
         "nature medicine": 10,
         "nejm ai": 9,
@@ -126,25 +135,23 @@ def score_impact(article: dict) -> float:
         "npj digital medicine": 7,
         "jama": 7,
         "jama network open": 6,
-        "radiology": 6,
         "radiology: artificial intelligence": 7,
+        "radiology": 6,
         "j am med inform assoc": 5,
     }
     source = article.get("source", "").lower()
     score = next((v for k, v in journal_scores.items() if k in source), 3)
-
-    # Boost for publication type
     pub_types = [p.get("value", "").lower() for p in article.get("pubtype", [])]
     if any("randomized" in pt for pt in pub_types):
         score += 2
     if any("multicenter" in pt for pt in pub_types):
         score += 1
-
     return score
 
 
+# ── Summarization ──────────────────────────────────────────────────────────────
+
 def summarize_with_claude(title: str, abstract: str) -> list[str]:
-    """Use the claude CLI to produce a 3-line Korean summary."""
     prompt = (
         "다음 의료 AI 논문의 핵심 내용을 한국어로 정확히 3줄로 요약해줘. "
         "각 줄은 핵심 포인트를 담고, 번호(1. 2. 3.) 없이 줄바꿈으로만 구분해줘.\n\n"
@@ -160,7 +167,6 @@ def summarize_with_claude(title: str, abstract: str) -> list[str]:
         lines = [l.strip() for l in result.stdout.strip().splitlines() if l.strip()]
         if len(lines) >= 3:
             return lines[:3]
-        # pad if shorter
         while len(lines) < 3:
             lines.append("(요약 불가)")
         return lines
@@ -168,7 +174,9 @@ def summarize_with_claude(title: str, abstract: str) -> list[str]:
         return ["(요약 생성 실패)", "(Claude CLI를 확인하세요)", ""]
 
 
-def format_paper(rank: int, article: dict, summary_lines: list[str]) -> str:
+# ── Formatting ─────────────────────────────────────────────────────────────────
+
+def format_paper_terminal(rank: int, article: dict, summary_lines: list[str]) -> str:
     title = article.get("title", "제목 없음").rstrip(".")
     source = article.get("source", "")
     pub_date = article.get("pubdate", "")
@@ -188,9 +196,102 @@ def format_paper(rank: int, article: dict, summary_lines: list[str]) -> str:
     return "\n".join(lines)
 
 
-def run(hours: int = 48, max_papers: int = 7, no_summarize: bool = False):
+def format_paper_md(rank: int, article: dict, summary_lines: list[str]) -> str:
+    title = article.get("title", "제목 없음").rstrip(".")
+    source = article.get("source", "")
+    pub_date = article.get("pubdate", "")
+    pmid = article.get("uid", "")
+    link = f"{PUBMED_BASE}{pmid}/" if pmid else ""
+
+    lines = [
+        f"## {rank}. {title}",
+        "",
+        f"**저널:** {source}  |  **발행일:** {pub_date}",
+        "",
+        "**핵심 요약**",
+        "",
+    ]
+    for i, s in enumerate(summary_lines, 1):
+        lines.append(f"{i}. {s}")
+    if link:
+        lines += ["", f"🔗 [{link}]({link})"]
+    lines.append("")
+    return "\n".join(lines)
+
+
+def build_markdown_digest(now: datetime, hours: int, papers: list[tuple]) -> str:
+    date_str = now.strftime("%Y년 %m월 %d일")
+    header = [
+        f"# 의료 AI 논문 데일리 다이제스트 — {date_str}",
+        "",
+        f"> 검색 기준: 최근 {hours}시간  |  저널: Nature Medicine, npj Digital Medicine, "
+        "Lancet Digital Health, NEJM AI, JAMA, Radiology, JAMIA",
+        "",
+        "---",
+        "",
+    ]
+    body = []
+    for rank, article, summary in papers:
+        body.append(format_paper_md(rank, article, summary))
+        body.append("---\n")
+
+    footer = [
+        f"*생성 시각: {now.strftime('%Y-%m-%d %H:%M UTC')} | 출처: PubMed E-utilities*",
+    ]
+    return "\n".join(header + body + footer)
+
+
+# ── Persistence ────────────────────────────────────────────────────────────────
+
+def save_digest(content: str, date_str: str) -> Path:
+    DIGESTS_DIR.mkdir(exist_ok=True)
+    path = DIGESTS_DIR / f"{date_str}.md"
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
+def update_index() -> None:
+    """Regenerate digests/README.md as a date-sorted index of all saved digests."""
+    files = sorted(DIGESTS_DIR.glob("????-??-??.md"), reverse=True)
+    lines = [
+        "# 의료 AI 논문 다이제스트 아카이브",
+        "",
+        "| 날짜 | 파일 |",
+        "|------|------|",
+    ]
+    for f in files:
+        date = f.stem
+        lines.append(f"| {date} | [{date}.md]({f.name}) |")
+    (DIGESTS_DIR / "README.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def git_commit_push(date_str: str, saved_path: Path) -> bool:
+    try:
+        subprocess.run(
+            ["git", "add", str(saved_path), str(DIGESTS_DIR / "README.md")],
+            cwd=REPO_ROOT, check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", f"digest: add {date_str} medical AI paper summary"],
+            cwd=REPO_ROOT, check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "push"],
+            cwd=REPO_ROOT, check=True, capture_output=True,
+        )
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"  ⚠️  git 오류: {e.stderr.decode().strip()}")
+        return False
+
+
+# ── Main ───────────────────────────────────────────────────────────────────────
+
+def run(hours: int = 48, max_papers: int = 7, no_summarize: bool = False,
+        save: bool = False, push: bool = False):
     days = max(1, hours // 24 + (1 if hours % 24 else 0))
     now = datetime.now(timezone.utc)
+    date_str = now.strftime("%Y-%m-%d")
 
     print(f"\n{'='*60}")
     print(f"  의료 AI 논문 데일리 다이제스트")
@@ -198,13 +299,12 @@ def run(hours: int = 48, max_papers: int = 7, no_summarize: bool = False):
     print(f"  검색 범위: 최근 {hours}시간")
     print(f"{'='*60}\n")
 
-    # Build combined PubMed query
     journal_filter = " OR ".join(
         f"({meta['pubmed_journal']})" for meta in JOURNALS.values()
     )
     full_query = f"({AI_TERMS}) AND ({journal_filter})"
 
-    print(f"🔍 PubMed 검색 중...")
+    print("🔍 PubMed 검색 중...")
     pmids = pubmed_search(full_query, days=days, retmax=100)
     if not pmids:
         print("  → 최근 논문이 없습니다.")
@@ -215,6 +315,7 @@ def run(hours: int = 48, max_papers: int = 7, no_summarize: bool = False):
     articles.sort(key=score_impact, reverse=True)
     top = articles[:max_papers]
 
+    collected: list[tuple] = []
     for rank, article in enumerate(top, 1):
         pmid = article.get("uid", "")
         title = article.get("title", "")
@@ -224,20 +325,50 @@ def run(hours: int = 48, max_papers: int = 7, no_summarize: bool = False):
             if no_summarize
             else summarize_with_claude(title, abstract)
         )
-        print(format_paper(rank, article, summary))
+        print(format_paper_terminal(rank, article, summary))
+        collected.append((rank, article, summary))
 
     print(f"\n{'='*60}")
     print(f"  총 {len(top)}편 | 출처: PubMed E-utilities")
     print(f"{'='*60}\n")
 
+    if save:
+        md = build_markdown_digest(now, hours, collected)
+        saved_path = save_digest(md, date_str)
+        update_index()
+        print(f"💾 저장 완료: {saved_path.relative_to(REPO_ROOT)}")
+
+        if push:
+            print("📤 GitHub에 푸시 중...")
+            ok = git_commit_push(date_str, saved_path)
+            if ok:
+                print("  → 푸시 완료!")
+
 
 def main():
     parser = argparse.ArgumentParser(description="Daily Medical AI Paper Digest")
-    parser.add_argument("--hours", type=int, default=48, help="Search window in hours (default: 48)")
-    parser.add_argument("--max", type=int, default=7, dest="max_papers", help="Max papers to show (default: 7)")
-    parser.add_argument("--no-summarize", action="store_true", help="Skip Claude summarization (faster)")
+    parser.add_argument("--hours", type=int, default=48,
+                        help="Search window in hours (default: 48)")
+    parser.add_argument("--max", type=int, default=7, dest="max_papers",
+                        help="Max papers to show (default: 7)")
+    parser.add_argument("--no-summarize", action="store_true",
+                        help="Skip Claude summarization (faster)")
+    parser.add_argument("--save", action="store_true",
+                        help="Save digest to digests/YYYY-MM-DD.md")
+    parser.add_argument("--push", action="store_true",
+                        help="Auto-commit and push saved digest to GitHub (requires --save)")
     args = parser.parse_args()
-    run(hours=args.hours, max_papers=args.max_papers, no_summarize=args.no_summarize)
+
+    if args.push and not args.save:
+        parser.error("--push requires --save")
+
+    run(
+        hours=args.hours,
+        max_papers=args.max_papers,
+        no_summarize=args.no_summarize,
+        save=args.save,
+        push=args.push,
+    )
 
 
 if __name__ == "__main__":
