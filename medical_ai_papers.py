@@ -78,6 +78,17 @@ DIGESTS_DIR = REPO_ROOT / "digests"
 
 # ── PubMed helpers ─────────────────────────────────────────────────────────────
 
+_HTTP_HEADERS = {
+    "User-Agent": "MedicalAIPaperDigest/1.0 (mailto:research@example.com)",
+    "Accept": "application/json",
+}
+
+
+def _urlopen(url: str, timeout: int = 15):
+    req = urllib.request.Request(url, headers=_HTTP_HEADERS)
+    return urllib.request.urlopen(req, timeout=timeout)
+
+
 def pubmed_search(query: str, days: int, retmax: int = 50) -> list[str]:
     min_date = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y/%m/%d")
     params = {
@@ -90,7 +101,7 @@ def pubmed_search(query: str, days: int, retmax: int = 50) -> list[str]:
         "datetype": "edat",
     }
     url = f"{PUBMED_ESEARCH}?{urlencode(params)}"
-    with urllib.request.urlopen(url, timeout=15) as resp:
+    with _urlopen(url) as resp:
         data = json.loads(resp.read())
     return data.get("esearchresult", {}).get("idlist", [])
 
@@ -104,7 +115,7 @@ def pubmed_summary(pmids: list[str]) -> list[dict]:
         "retmode": "json",
     }
     url = f"{PUBMED_ESUMMARY}?{urlencode(params)}"
-    with urllib.request.urlopen(url, timeout=15) as resp:
+    with _urlopen(url) as resp:
         data = json.loads(resp.read())
     results = data.get("result", {})
     return [results[pmid] for pmid in pmids if pmid in results]
@@ -119,7 +130,8 @@ def fetch_abstract(pmid: str) -> str:
     }
     url = f"{PUBMED_EFETCH}?{urlencode(params)}"
     try:
-        with urllib.request.urlopen(url, timeout=15) as resp:
+        req = urllib.request.Request(url, headers=_HTTP_HEADERS)
+        with urllib.request.urlopen(req, timeout=15) as resp:
             return resp.read().decode("utf-8", errors="replace")
     except Exception:
         return ""
