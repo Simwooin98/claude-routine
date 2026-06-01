@@ -31,6 +31,13 @@ from urllib.parse import urlencode
 import urllib.request
 
 
+PUBMED_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (compatible; MedAIDigest/1.0; "
+        "mailto:winston0808@gmail.com)"
+    )
+}
+
 JOURNALS = {
     "Nature Medicine": {
         "pubmed_journal": "Nature medicine[Journal]",
@@ -90,7 +97,8 @@ def pubmed_search(query: str, days: int, retmax: int = 50) -> list[str]:
         "datetype": "edat",
     }
     url = f"{PUBMED_ESEARCH}?{urlencode(params)}"
-    with urllib.request.urlopen(url, timeout=15) as resp:
+    req = urllib.request.Request(url, headers=PUBMED_HEADERS)
+    with urllib.request.urlopen(req, timeout=15) as resp:
         data = json.loads(resp.read())
     return data.get("esearchresult", {}).get("idlist", [])
 
@@ -104,7 +112,8 @@ def pubmed_summary(pmids: list[str]) -> list[dict]:
         "retmode": "json",
     }
     url = f"{PUBMED_ESUMMARY}?{urlencode(params)}"
-    with urllib.request.urlopen(url, timeout=15) as resp:
+    req = urllib.request.Request(url, headers=PUBMED_HEADERS)
+    with urllib.request.urlopen(req, timeout=15) as resp:
         data = json.loads(resp.read())
     results = data.get("result", {})
     return [results[pmid] for pmid in pmids if pmid in results]
@@ -119,7 +128,8 @@ def fetch_abstract(pmid: str) -> str:
     }
     url = f"{PUBMED_EFETCH}?{urlencode(params)}"
     try:
-        with urllib.request.urlopen(url, timeout=15) as resp:
+        req = urllib.request.Request(url, headers=PUBMED_HEADERS)
+        with urllib.request.urlopen(req, timeout=15) as resp:
             return resp.read().decode("utf-8", errors="replace")
     except Exception:
         return ""
