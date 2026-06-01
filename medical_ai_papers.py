@@ -72,11 +72,23 @@ PUBMED_ESUMMARY = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
 PUBMED_EFETCH = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
 PUBMED_BASE = "https://pubmed.ncbi.nlm.nih.gov/"
 
+NCBI_TOOL = "medical_ai_digest"
+NCBI_EMAIL = "winston0808@gmail.com"
+
 REPO_ROOT = Path(__file__).parent
 DIGESTS_DIR = REPO_ROOT / "digests"
 
 
 # ── PubMed helpers ─────────────────────────────────────────────────────────────
+
+def _open_url(url: str) -> bytes:
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": f"{NCBI_TOOL}/1.0 ({NCBI_EMAIL})"},
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return resp.read()
+
 
 def pubmed_search(query: str, days: int, retmax: int = 50) -> list[str]:
     min_date = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y/%m/%d")
@@ -88,10 +100,11 @@ def pubmed_search(query: str, days: int, retmax: int = 50) -> list[str]:
         "sort": "pub_date",
         "mindate": min_date,
         "datetype": "edat",
+        "tool": NCBI_TOOL,
+        "email": NCBI_EMAIL,
     }
     url = f"{PUBMED_ESEARCH}?{urlencode(params)}"
-    with urllib.request.urlopen(url, timeout=15) as resp:
-        data = json.loads(resp.read())
+    data = json.loads(_open_url(url))
     return data.get("esearchresult", {}).get("idlist", [])
 
 
@@ -102,10 +115,11 @@ def pubmed_summary(pmids: list[str]) -> list[dict]:
         "db": "pubmed",
         "id": ",".join(pmids),
         "retmode": "json",
+        "tool": NCBI_TOOL,
+        "email": NCBI_EMAIL,
     }
     url = f"{PUBMED_ESUMMARY}?{urlencode(params)}"
-    with urllib.request.urlopen(url, timeout=15) as resp:
-        data = json.loads(resp.read())
+    data = json.loads(_open_url(url))
     results = data.get("result", {})
     return [results[pmid] for pmid in pmids if pmid in results]
 
@@ -116,11 +130,12 @@ def fetch_abstract(pmid: str) -> str:
         "id": pmid,
         "rettype": "abstract",
         "retmode": "text",
+        "tool": NCBI_TOOL,
+        "email": NCBI_EMAIL,
     }
     url = f"{PUBMED_EFETCH}?{urlencode(params)}"
     try:
-        with urllib.request.urlopen(url, timeout=15) as resp:
-            return resp.read().decode("utf-8", errors="replace")
+        return _open_url(url).decode("utf-8", errors="replace")
     except Exception:
         return ""
 
