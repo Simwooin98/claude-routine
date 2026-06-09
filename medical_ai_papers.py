@@ -30,6 +30,13 @@ from pathlib import Path
 from urllib.parse import urlencode
 import urllib.request
 
+_UA = "Mozilla/5.0 (compatible; MedAIDigest/1.0; mailto:claude-routine@example.com)"
+
+
+def _open(url: str, timeout: int = 15):
+    req = urllib.request.Request(url, headers={"User-Agent": _UA})
+    return urllib.request.urlopen(req, timeout=timeout)
+
 
 JOURNALS = {
     "Nature Medicine": {
@@ -90,7 +97,7 @@ def pubmed_search(query: str, days: int, retmax: int = 50) -> list[str]:
         "datetype": "edat",
     }
     url = f"{PUBMED_ESEARCH}?{urlencode(params)}"
-    with urllib.request.urlopen(url, timeout=15) as resp:
+    with _open(url) as resp:
         data = json.loads(resp.read())
     return data.get("esearchresult", {}).get("idlist", [])
 
@@ -104,7 +111,7 @@ def pubmed_summary(pmids: list[str]) -> list[dict]:
         "retmode": "json",
     }
     url = f"{PUBMED_ESUMMARY}?{urlencode(params)}"
-    with urllib.request.urlopen(url, timeout=15) as resp:
+    with _open(url) as resp:
         data = json.loads(resp.read())
     results = data.get("result", {})
     return [results[pmid] for pmid in pmids if pmid in results]
@@ -119,7 +126,7 @@ def fetch_abstract(pmid: str) -> str:
     }
     url = f"{PUBMED_EFETCH}?{urlencode(params)}"
     try:
-        with urllib.request.urlopen(url, timeout=15) as resp:
+        with _open(url) as resp:
             return resp.read().decode("utf-8", errors="replace")
     except Exception:
         return ""
