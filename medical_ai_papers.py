@@ -78,6 +78,14 @@ DIGESTS_DIR = REPO_ROOT / "digests"
 
 # ── PubMed helpers ─────────────────────────────────────────────────────────────
 
+def _open_url(url: str, timeout: int = 20):
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "MedAIDigest/1.0 (mailto:research@example.com)"},
+    )
+    return urllib.request.urlopen(req, timeout=timeout)
+
+
 def pubmed_search(query: str, days: int, retmax: int = 50) -> list[str]:
     min_date = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y/%m/%d")
     params = {
@@ -90,7 +98,7 @@ def pubmed_search(query: str, days: int, retmax: int = 50) -> list[str]:
         "datetype": "edat",
     }
     url = f"{PUBMED_ESEARCH}?{urlencode(params)}"
-    with urllib.request.urlopen(url, timeout=15) as resp:
+    with _open_url(url) as resp:
         data = json.loads(resp.read())
     return data.get("esearchresult", {}).get("idlist", [])
 
@@ -104,7 +112,7 @@ def pubmed_summary(pmids: list[str]) -> list[dict]:
         "retmode": "json",
     }
     url = f"{PUBMED_ESUMMARY}?{urlencode(params)}"
-    with urllib.request.urlopen(url, timeout=15) as resp:
+    with _open_url(url) as resp:
         data = json.loads(resp.read())
     results = data.get("result", {})
     return [results[pmid] for pmid in pmids if pmid in results]
@@ -119,7 +127,7 @@ def fetch_abstract(pmid: str) -> str:
     }
     url = f"{PUBMED_EFETCH}?{urlencode(params)}"
     try:
-        with urllib.request.urlopen(url, timeout=15) as resp:
+        with _open_url(url) as resp:
             return resp.read().decode("utf-8", errors="replace")
     except Exception:
         return ""
@@ -275,8 +283,13 @@ def git_commit_push(date_str: str, saved_path: Path) -> bool:
             ["git", "commit", "-m", f"digest: add {date_str} medical AI paper summary"],
             cwd=REPO_ROOT, check=True, capture_output=True,
         )
+        branch_result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=REPO_ROOT, check=True, capture_output=True, text=True,
+        )
+        branch = branch_result.stdout.strip()
         subprocess.run(
-            ["git", "push"],
+            ["git", "push", "-u", "origin", branch],
             cwd=REPO_ROOT, check=True, capture_output=True,
         )
         return True
