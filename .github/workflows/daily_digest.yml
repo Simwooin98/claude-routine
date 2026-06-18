@@ -1,0 +1,54 @@
+name: Daily Medical AI Paper Digest
+
+on:
+  schedule:
+    # 23:00 UTC = 08:00 KST
+    - cron: "0 23 * * *"
+  workflow_dispatch:
+    inputs:
+      hours:
+        description: "Search window in hours"
+        default: "48"
+      max_papers:
+        description: "Max papers to show"
+        default: "7"
+
+permissions:
+  contents: write
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Claude CLI
+        run: npm install -g @anthropic-ai/claude-code
+        env:
+          NODE_AUTH_TOKEN: ""
+
+      - name: Run paper digest
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          HOURS: ${{ github.event.inputs.hours || '48' }}
+          MAX: ${{ github.event.inputs.max_papers || '7' }}
+        run: |
+          python medical_ai_papers.py --hours "$HOURS" --max "$MAX" --save
+
+      - name: Commit and push digest
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          DATE=$(date -u +%Y-%m-%d)
+          git add digests/
+          git diff --staged --quiet && echo "No new papers today." || \
+            git commit -m "digest: add ${DATE} medical AI paper summary"
+          git push origin HEAD
